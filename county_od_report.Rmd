@@ -1,0 +1,655 @@
+---
+output: html_document
+params: 
+    county: ''
+    end_date: ''
+    start_date: ''
+    wd: ''
+    username: ''
+    pw: ''
+    user_id: ''
+title: 'Occurrent Emergency Department Visits for Suspected All Drug and Opioid Overdose'
+author: '`r params$county` County'
+date: '`r format(Sys.Date(), "%B %d, %Y")`'
+---
+
+<style type="text/css">
+
+h1.title {
+  font-size: 25px;
+  color: Black;
+  text-align: center;
+  font-family: "Times New Roman", Times, serif;
+}
+h4.author { /* Header 4 - and the author and data headers use this too  */
+    font-size: 18px;
+  font-family: "Times New Roman", Times, serif;
+  color: Black;
+  text-align: center;
+}
+h4.date { /* Header 4 - and the author and data headers use this too  */
+  font-size: 18px;
+  font-family: "Times New Roman", Times, serif;
+  color: Black;
+  text-align: center;
+}
+</style>
+
+```{r setup, include=FALSE}
+knitr::opts_knit$set(root.dir = params$wd)
+knitr::opts_knit$set(warning=FALSE)
+knitr::opts_knit$set(error=FALSE)
+
+library(httr)
+library(jsonlite)
+httr::set_config(config(ssl_verifypeer = 0L))
+library(dplyr)
+library(ggplot2)
+library(gridExtra)
+library(janitor)
+library(kableExtra)
+library(RColorBrewer)
+
+```
+
+
+```{r include=FALSE, warning=FALSE}
+#GETTING COUNTY TIME SERIES DATA
+URLs <- c(paste0('https://essence.syndromicsurveillance.org/nssp_essence/api/timeSeries?endDate=', params$end_date, '&ccddCategory=cdc%20opioid%20overdose%20v2&geography=wa_', gsub(' ', '%20', params$county), '&percentParam=noPercent&geographySystem=hospitalregion&datasource=va_hosp&detector=nodetectordetector&startDate=', params$start_date, '&ageNCHS=unknown&ageNCHS=11-14&ageNCHS=15-24&ageNCHS=25-34&ageNCHS=35-44&ageNCHS=45-54&ageNCHS=55-64&ageNCHS=65-74&ageNCHS=75-84&ageNCHS=85-1000&timeResolution=quarterly&hasBeenE=1&medicalGroupingSystem=essencesyndromes&userId=', params$user_id, '&hospFacilityType=emergency%20care&aqtTarget=TimeSeries'),
+         paste0('https://essence.syndromicsurveillance.org/nssp_essence/api/timeSeries?endDate=', params$end_date, '&ccddCategory=cdc%20heroin%20overdose%20v4&geography=wa_', gsub(' ', '%20', params$county), '&percentParam=noPercent&geographySystem=hospitalregion&datasource=va_hosp&detector=nodetectordetector&startDate=', params$start_date, '&ageNCHS=unknown&ageNCHS=11-14&ageNCHS=15-24&ageNCHS=25-34&ageNCHS=35-44&ageNCHS=45-54&ageNCHS=55-64&ageNCHS=65-74&ageNCHS=75-84&ageNCHS=85-1000&timeResolution=quarterly&hasBeenE=1&medicalGroupingSystem=essencesyndromes&userId=', params$user_id, '&hospFacilityType=emergency%20care&aqtTarget=TimeSeries'),
+         paste0('https://essence.syndromicsurveillance.org/nssp_essence/api/timeSeries?endDate=', params$end_date, '&ccddCategory=cdc%20all%20drug%20v1&geography=wa_', gsub(' ', '%20', params$county), '&percentParam=noPercent&geographySystem=hospitalregion&datasource=va_hosp&detector=nodetectordetector&startDate=', params$start_date, '&ageNCHS=unknown&ageNCHS=11-14&ageNCHS=15-24&ageNCHS=25-34&ageNCHS=35-44&ageNCHS=45-54&ageNCHS=55-64&ageNCHS=65-74&ageNCHS=75-84&ageNCHS=85-1000&timeResolution=quarterly&hasBeenE=1&medicalGroupingSystem=essencesyndromes&userId=', params$user_id, '&hospFacilityType=emergency%20care&aqtTarget=TimeSeries'),
+         paste0('https://essence.syndromicsurveillance.org/nssp_essence/api/timeSeries?endDate=', params$end_date, '&geography=wa_', gsub(' ', '%20', params$county), '&percentParam=noPercent&geographySystem=hospitalregion&datasource=va_hosp&detector=nodetectordetector&startDate=', params$start_date, '&ageNCHS=15-24&ageNCHS=25-34&ageNCHS=35-44&ageNCHS=45-54&ageNCHS=55-64&ageNCHS=65-74&ageNCHS=75-84&ageNCHS=85-1000&ageNCHS=11-14&ageNCHS=unknown&timeResolution=quarterly&hasBeenE=1&medicalGroupingSystem=essencesyndromes&userId=', params$user_id, '&hospFacilityType=emergency%20care&aqtTarget=TimeSeries'))
+
+df <- lapply(URLs, function(u){
+
+     api_response <- GET(u, authenticate(params$username, params$pw))
+     api_response_json <- content(api_response, as = "text")
+     api_data <- fromJSON(api_response_json, simplifyDataFrame = TRUE)
+     api_data$timeSeriesData
+
+})
+
+c_opioid <- df[[1]][ , c('date', 'count')]
+c_heroin <- df[[2]][ , c('date', 'count')]
+c_all_drugs <- df[[3]][ , c('date', 'count')]
+c_non_heroin <- merge(c_opioid, c_heroin, by='date')
+c_non_heroin <- c_non_heroin %>% mutate(count = count.x-count.y) %>% select(date, count)
+c_ED <- df[[4]][ , c('date', 'count')]
+
+#CREATING REGION COLUMN
+dfs <- c('c_opioid', 'c_heroin', 'c_all_drugs', 'c_non_heroin', 'c_ED')
+
+for (i in seq_along(dfs)) {
+     x <- get(dfs[i])
+     x$Region <- paste0(params$county, ' County')
+     assign(dfs[i], x)
+     }
+
+```
+
+```{r include=FALSE}
+#GETTING STATE RATES
+URLs <- c(paste0('https://essence.syndromicsurveillance.org/nssp_essence/api/timeSeries?endDate=', params$end_date, '&ccddCategory=cdc%20opioid%20overdose%20v2&percentParam=noPercent&geographySystem=hospitalregion&datasource=va_hosp&detector=nodetectordetector&startDate=', params$start_date, '&ageNCHS=unknown&ageNCHS=11-14&ageNCHS=15-24&ageNCHS=25-34&ageNCHS=35-44&ageNCHS=45-54&ageNCHS=55-64&ageNCHS=65-74&ageNCHS=75-84&ageNCHS=85-1000&timeResolution=quarterly&hasBeenE=1&medicalGroupingSystem=essencesyndromes&userId=', params$user_id, '&hospFacilityType=emergency%20care&aqtTarget=TimeSeries'),
+         paste0('https://essence.syndromicsurveillance.org/nssp_essence/api/timeSeries?endDate=', params$end_date, '&ccddCategory=cdc%20heroin%20overdose%20v4&percentParam=noPercent&geographySystem=hospitalregion&datasource=va_hosp&detector=nodetectordetector&startDate=', params$start_date, '&ageNCHS=unknown&ageNCHS=11-14&ageNCHS=15-24&ageNCHS=25-34&ageNCHS=35-44&ageNCHS=45-54&ageNCHS=55-64&ageNCHS=65-74&ageNCHS=75-84&ageNCHS=85-1000&timeResolution=quarterly&hasBeenE=1&medicalGroupingSystem=essencesyndromes&userId=', params$user_id, '&hospFacilityType=emergency%20care&aqtTarget=TimeSeries'),
+         paste0('https://essence.syndromicsurveillance.org/nssp_essence/api/timeSeries?endDate=', params$end_date, '&ccddCategory=cdc%20all%20drug%20v1&percentParam=noPercent&geographySystem=hospitalregion&datasource=va_hosp&detector=nodetectordetector&startDate=', params$start_date, '&ageNCHS=unknown&ageNCHS=11-14&ageNCHS=15-24&ageNCHS=25-34&ageNCHS=35-44&ageNCHS=45-54&ageNCHS=55-64&ageNCHS=65-74&ageNCHS=75-84&ageNCHS=85-1000&timeResolution=quarterly&hasBeenE=1&medicalGroupingSystem=essencesyndromes&userId=', params$user_id, '&hospFacilityType=emergency%20care&aqtTarget=TimeSeries'),
+         paste0('https://essence.syndromicsurveillance.org/nssp_essence/api/timeSeries?endDate=', params$end_date, '&percentParam=noPercent&geographySystem=hospitalregion&datasource=va_hosp&detector=nodetectordetector&startDate=', params$start_date, '&ageNCHS=unknown&ageNCHS=11-14&ageNCHS=15-24&ageNCHS=25-34&ageNCHS=35-44&ageNCHS=45-54&ageNCHS=55-64&ageNCHS=65-74&ageNCHS=75-84&ageNCHS=85-1000&timeResolution=quarterly&hasBeenE=1&medicalGroupingSystem=essencesyndromes&userId=', params$user_id, '&hospFacilityType=emergency%20care&aqtTarget=TimeSeries'))
+
+df <- lapply(URLs, function(u){
+
+     api_response <- GET(u, authenticate(params$username, params$pw))
+     api_response_json <- content(api_response, as = "text")
+     api_data <- fromJSON(api_response_json, simplifyDataFrame = TRUE)
+     api_data$timeSeriesData
+
+})
+
+wa_opioid <- df[[1]][ , c('date', 'count')]
+wa_heroin <- df[[2]][ , c('date', 'count')]
+wa_all_drugs <- df[[3]][ , c('date', 'count')]
+wa_non_heroin <- merge(wa_opioid, wa_heroin, by='date')
+wa_non_heroin <- wa_non_heroin %>% mutate(count = count.x-count.y) %>% select(date, count)
+wa_ED <- df[[4]][ , c('date', 'count')]
+
+#CREATING REGION COLUMN
+dfs <- c('wa_opioid', 'wa_heroin', 'wa_all_drugs', 'wa_non_heroin', 'wa_ED')
+
+for (i in seq_along(dfs)) {
+     x <- get(dfs[i])
+     x$Region <- 'WA State'
+     assign(dfs[i], x)
+     }
+
+
+```
+
+
+```{r include=FALSE}
+#MERGING DATA FRAMES FOR COUNTY RATES AND REPLACING QUARTERS WITH NO COUNTS WITH 0
+dfs <- c('c_opioid', 'c_heroin', 'c_all_drugs', 'c_non_heroin')
+
+for (i in seq_along(dfs)) {
+x <- get(dfs[i])
+x <- merge(x, c_ED, by=c('date', 'Region'), all.y=TRUE)
+x$Region <- with(x, replace(Region, is.na(Region), paste0(params$county, ' County'))) 
+x$count.x <- with(x, replace(count.x, is.na(count.x), 0))
+x$rate <- with(x, (count.x/count.y)*10000)
+assign(dfs[i], x)
+  }
+
+rm(c_ED)
+
+
+#MERGING DATA FRAMES FOR STATE RATES AND REPLACING QUARTERS WITH NO COUNTS WITH 0
+dfs <- c('wa_opioid', 'wa_heroin', 'wa_all_drugs', 'wa_non_heroin')
+
+for (i in seq_along(dfs)) {
+x <- get(dfs[i])
+x <- merge(x, wa_ED, by=c('date', 'Region'), all.y=TRUE)
+x$Region <- with(x, replace(Region, is.na(Region), 'WA State')) 
+x$count.x <- with(x, replace(count.x, is.na(count.x), 0))
+x$rate <- with(x, (count.x/count.y)*10000)
+assign(dfs[i], x)
+  }
+
+rm(wa_ED)
+
+#MERGING COUNTY AND STATE RATES FOR GRAPHS
+opioid <- rbind(c_opioid, wa_opioid)
+heroin <- rbind(c_heroin, wa_heroin)
+all_drugs <- rbind(c_all_drugs, wa_all_drugs)
+non_heroin <- rbind(c_non_heroin, wa_non_heroin)
+ 
+rm(c_opioid, c_heroin, c_all_drugs, c_non_heroin, wa_opioid, wa_heroin, wa_all_drugs, wa_non_heroin)
+
+dfs <- c('opioid', 'heroin', 'all_drugs', 'non_heroin')
+
+for (i in seq_along(dfs)) {
+x <- get(dfs[i])
+x$date <- gsub('-01-01', '-Q1', x$date)
+x$date <- gsub('-04-01', '-Q2', x$date)
+x$date <- gsub('-07-01', '-Q3', x$date)
+x$date <- gsub('-10-01', '-Q4', x$date)
+
+assign(dfs[i], x)
+  }
+
+#creating table with first and last quarter description 
+first_quarter <- all_drugs$date[1]
+last_quarter <- all_drugs$date[nrow(all_drugs)]
+
+
+#importing active counties csv
+#setwd('~/opioid_reports/reports_v5/data')
+active_counties <- read.csv('active_counties.csv', stringsAsFactors = FALSE)
+cumsum <- active_counties[active_counties$Facility_County==params$county, 'cumsum']
+```
+
+<br />
+ 
+The following report contains a review of information on emergency department (ED) visits for suspected all drug, opioid, heroin, and non-heroin opioid (i.e., opioid without mention of heroin) overdoses identified in data reported to the Rapid Health Information NetwOrk (RHINO) for hospitals in `r params$county` County. *Suspected overdoses* are detected in our data by querying the contents of chief complaint and discharge diagnosis using ESSENCE Chief Complaint Discharge Diagnosis (CCDD) categories. Since these are not confirmed by lab results, counts in this report may differ from the true value. The timeframe of data for this report is from `r first_quarter` through `r last_quarter` (the first and last quarters for which data is complete for ≥75% of EDs in `r params$county` County). At the time of creating this report, `r cumsum` of hospitals in `r params$county` County were sending data to Washington State's syndromic surveillance program. 
+
+*Note: Please do not use the data in this report for public dissemination as the data have not been validated against hospital records and it includes small record counts, which are potentially identifiable.*
+
+<br />
+**Figure 1.** All graphs show the rate of suspected overdose visits per 10,000 ED visits by quarter. *Top Left*: All Drug v1 CCDD Category. *Top Right*: Opioid Overdose v2 CCDD Category. *Bottom left*: Heroin Overdose v4 CCDD Category. *Bottom right*: Non-Heroin Opioid Overdose Visits.
+
+
+```{r, echo=FALSE, message=FALSE, warning=FALSE, error=FALSE, fig.align='center', fig.width=15, fig.height=10}
+#CREATING COLOR PALETTE
+myColors <- c('#d80f20', '#0015ff', '#4f9b44')
+all_drugs$Region <- as.factor(all_drugs$Region)
+names(myColors) <- levels(all_drugs$Region)
+
+#creating function to make plots for plot 1
+plot_1 <- function(data, title) {
+  ggplot(data, aes(date, rate, group = Region)) +
+    geom_line(aes(linetype = Region, col = Region), size=1.4) +
+    geom_point(aes(color=Region), size=3) + 
+    scale_color_manual(name = 'Region', values = myColors) +
+    scale_linetype_manual(name = 'Region', values=c('solid', 'twodash')) +
+    guides(colour = guide_legend(override.aes = list(shape = NA))) + 
+    scale_y_continuous(expand = c(0,0), limits = c(0, max(all_drugs$rate)+5)) + 
+    theme(plot.subtitle = element_text(vjust = 1), 
+          plot.caption = element_text(vjust = 1), 
+          plot.title = element_text(hjust = 0.5)) +
+    theme(legend.position = "bottom", 
+          legend.direction = "horizontal") + 
+    theme(axis.title = element_text(size = 14), 
+          axis.text = element_text(size = 12), 
+          plot.title = element_text(size = 18)) + 
+    theme(legend.text = element_text(size = 12), 
+          legend.title = element_text(size = 14)) +
+    labs(title = title, 
+         x = "Year-Quarter", 
+         y = "Rate (per 10,000 ED visits)")
+  }
+
+#Creating four plots for all drug, opioid, heroin and non-heroin
+p1 <- plot_1(all_drugs, "CDC All Drug v1 CCDD Category Rates")
+p2 <- plot_1(opioid, "CDC Opioid Overdose v2 CCDD Category Rates")  
+p3 <- plot_1(heroin, "CDC Heroin Overdose v4 CCDD Category Rates")
+p4 <- plot_1(non_heroin, "Non-Heroin Opioid Overdose Rates")
+
+grid.arrange(p1, p2, p3, p4, ncol=2)
+
+```
+
+
+```{r echo=FALSE, message=FALSE, error=FALSE, fig.align='center'}
+#FINDING MEAN RATES AND PERCENT DIFFERENCE FOR OPIOID, HEROIN, ALL DRUGS AND Non-Heroin
+county = paste0(params$county, ' County')
+dfs <- c('opioid', 'heroin', 'all_drugs', 'non_heroin')
+
+for (i in seq_along(dfs)) {
+x <- get(dfs[i])
+
+c_mean <- (sum(x[x$Region==county, 'count.x'])/sum(x[x$Region==county, 'count.y']))*10000
+wa_mean <- (sum(x[x$Region=='WA State', 'count.x'])/sum(x[x$Region=='WA State', 'count.y']))*10000
+percent_change <- (c_mean-wa_mean)/(wa_mean)
+
+assign(paste0('c_mean_', dfs[i]), round(c_mean, 1))
+
+
+a_or_b = ""
+
+if (percent_change<0) {
+     a_or_b='below'
+} else {
+     a_or_b='above'
+}
+
+assign(paste0('a_or_b_', dfs[i]), a_or_b)
+assign(paste0('percent_change_', dfs[i]), round(abs(percent_change*100), 0))
+}
+
+
+```
+
+<br />
+**Table 1.** *Mean rate of overdose visits per 10,000 ED visits from `r first_quarter` through `r last_quarter`, % above or below the mean statewide for each drug category*  
+
+```{r echo=FALSE}
+categories <- c('CDC All Drug v1 CCDD Category', 'CDC Opioid Overdose v2 CCDD Category', 'CDC Heroin Overdose v4 CCDD Category', 'Non-Heroin Opioid Overdose')
+mean_rate <- c(c_mean_all_drugs, c_mean_opioid, c_mean_heroin, c_mean_non_heroin)
+percent_change <- c(percent_change_all_drugs, percent_change_opioid, percent_change_heroin, percent_change_non_heroin)
+a_or_b <- c(a_or_b_all_drugs, a_or_b_opioid, a_or_b_heroin, a_or_b_non_heroin)
+table <- data.frame("drug_category" = categories, "mean_rate" = mean_rate, "% change" =  paste0(percent_change, '% ', a_or_b))
+colnames(table) <- c('Drug Category', 'Mean rate per 10,000 ED visits', '% Above or below statewide rate')  
+
+kable(table, align = c('l', 'c', 'c')) %>%
+     kable_styling("striped", full_width = F) %>%
+     kable_styling(position='center') 
+```
+
+<br />
+**Table 2.** *Quarterly ED visit counts for overdose by category from `r first_quarter` through `r last_quarter`.*
+```{r, echo=FALSE, warning=FALSE, message=FALSE, fig.width=4}
+dfs <- c('opioid', 'heroin', 'all_drugs', 'non_heroin')
+
+for (i in seq_along(dfs)) {
+     x <- get(dfs[i])
+     x <- x[ , c(1, 2, 3)]
+     assign(dfs[i], x)
+     }
+
+table_1 <- Reduce(function(x,y) merge(x = x, y = y, by = c('date', 'Region')), 
+            list(all_drugs, opioid, heroin, non_heroin))
+
+colnames(table_1) <- c('Quarter Year', 'Region', 'All Drug', 'Opioid', 'Heroin', 'Non-Heroin Opioid')
+
+table_1 <- table_1 %>%
+     filter(Region==paste0(params$county, ' County')) %>%
+     select(-Region) %>%
+     adorn_totals("row")
+
+kable(table_1, align = 'c') %>%
+     kable_styling("striped", full_width = F) %>%
+     row_spec(nrow(table_1), bold=T) %>%
+     kable_styling(position='center') 
+
+     
+```
+<br />
+
+**Table 3.** *Counts and proportions of suspected overdose ED visits by demographics from `r first_quarter` through `r last_quarter`.* Deceased category reflects deaths that occurred in the facility and may have occurred in the ED or after being admitted for inpatient care.
+
+```{r echo=FALSE, message=FALSE, error=FALSE, warning=FALSE}
+library(R.utils)
+#setwd('~/opioid_reports/reports_v5/data')
+data_details <- readRDS('data_details.Rda')
+county_dd <- with(data_details, data_details[HospitalRegion==paste0('WA_', params$county) & QuarterYear>=all_drugs$date[1], ])
+
+#creating function to create column %'s for table 3
+
+col_percents <- function(df, col_name) {
+  
+  column <- enquo(col_name)
+  
+  df %>%
+     group_by(CCDDCategory, !!column) %>%
+     rename(Category=!!column) %>%
+     summarise(n=n()) %>%
+     mutate(freq = paste(round((n / sum(n))*100, 1), '%')) %>%
+     arrange(desc(n))
+}
+
+
+#creating column %'s for inpatient, death, race, sex, and age group 
+inpatient <- col_percents(county_dd, HasBeenI)
+death <- col_percents(county_dd, C_Death)
+race <- col_percents(county_dd, race)
+sex <- col_percents(county_dd, Sex)
+age_group <- col_percents(county_dd, AgeGroup) 
+
+#CREATING RESIDENT AND NON RESIDENT COLUMN
+code <- active_counties[active_counties$Facility_County==params$county, 'County_FIPS_Code']
+
+if (nchar(code)<2) {code <- paste0('5300', code)} else {code <- paste0('530', code)}
+
+county_dd$Resident <- NA
+county_dd[county_dd$C_Patient_County==code, 'Resident'] <- 'Resident'
+county_dd[county_dd$C_Patient_County!=code, 'Resident'] <- 'Non-Resident'
+
+resident <- county_dd %>%
+     group_by(CCDDCategory, Resident) %>%
+     rename(Category=Resident) %>%
+     summarise(n=n()) %>%
+     mutate(freq = paste(round((n / sum(n))*100, 1), '%')) %>%
+     arrange(desc(n))
+
+#GETTING SUMMARY COUNTS AND %'s AND REARRANGING TABLE
+dfs <- list(inpatient, death, race, sex, age_group, resident)
+
+dfs <- lapply(dfs, function(x){
+all_drug <- x[x$CCDDCategory=='CDC All Drug v1', c(2:4)]
+opioid <- x[x$CCDDCategory=='CDC Opioid Overdose v2', c(2:4)]
+heroin <- x[x$CCDDCategory=='CDC Heroin Overdose v4', c(2:4)]
+x <- Reduce(function(x,y) merge(x = x, y = y, by = c('Category'), all=TRUE), list(all_drug, opioid, heroin))
+})
+
+#FILLING IN 0's and 0%
+dfs <- lapply(dfs, function(x) {
+     x[c('n', 'n.x', 'n.y')][is.na(x[c('n', 'n.x', 'n.y')])] <- 0
+     x[c('freq', 'freq.x', 'freq.y')][is.na(x[c('freq', 'freq.x', 'freq.y')])] <- '0 %'
+     ; x
+})
+
+#CREATING Non-Heroin COLUMNS
+dfs <- lapply(dfs, function(x){
+     x$n.z <- x$n.y-x$n
+     x$freq.z <- paste0(round(prop.table(x$n.z)*100, 1), '%')     
+     ; x
+})
+
+#reordering columns
+dfs <- lapply(dfs, function(x){
+     x <- x[order(-x$n.x), ] })
+
+#rearranging age column by category rather than count
+dfs[[5]] <- dfs[[5]][order(dfs[[5]]$'Category'), ]
+
+#rearranging race table so unknown is at bottom
+race <- dfs[[3]]
+unknown <- race[race$Category=='Unknown', ]
+race <- race[race$Category!='Unknown', ]
+race <- rbind(race, unknown)
+dfs[[3]] <- race
+
+#COLLAPSING LIST OF DFs INTO ONE DF
+table_2 <- do.call("rbind", dfs)
+rownames(table_2) <- NULL
+
+#creating row totals 
+totals <- colSums(table_2[1:nrow(dfs[[1]]), c(2, 4, 6, 8)])
+totals <- insert(totals, ats=1, 'Total')
+
+for (i in c(3, 5, 7, 9)) {
+  totals <- insert(totals, ats=i, '100 %')
+}
+
+table_2 <- rbind(totals, table_2)
+
+#FORMATTING TABLE 2
+table_2 %>%
+     kable(align=c('r', 'c', 'c', 'c', 'c', 'c', 'c', 'c', 'c'), 
+           col.names = c('', 'n', '%', 'n', '%', 'n', '%', 'n', '%')) %>%
+     kable_styling("striped") %>%
+     group_rows("Admitted as Inpatient", 2, nrow(dfs[[1]])+1) %>%
+     group_rows('Deceased', nrow(dfs[[1]])+2, nrow(dfs[[1]])+nrow(dfs[[2]])+1) %>%
+     group_rows("Race", nrow(dfs[[1]])+nrow(dfs[[2]])+2, nrow(dfs[[1]])+nrow(dfs[[2]])+nrow(dfs[[3]])+1) %>%
+     group_rows("Sex", nrow(dfs[[1]])+nrow(dfs[[2]])+nrow(dfs[[3]])+2, nrow(dfs[[1]])+nrow(dfs[[2]])+nrow(dfs[[3]])+nrow(dfs[[4]])+1) %>%
+     group_rows("Age Group", nrow(table_2)-nrow(dfs[[5]])-nrow(dfs[[6]])+1, nrow(table_2)-nrow(dfs[[6]])) %>%
+     group_rows("County Resident", nrow(table_2)-nrow(dfs[[6]])+1, nrow(table_2)) %>%
+     add_header_above(c(" " = 1, "All Drugs" = 2, "Opioid" = 2, "Heroin" = 2, "Non-Heroin Opioid" = 2)) %>%
+     row_spec(1, bold = T)
+
+```
+
+<br />
+<br />
+
+**Figure 2.** All graphs show suspected overdose ED visits by age and sex for hospitals from `r first_quarter` through `r last_quarter`. Visits with unknown age or sex were not included in these graphs. *Top Left*: All Drug v1 CCDD Category. *Top Right*: Opioid Overdose v2 CCDD Category. *Bottom Left*: Heroin Overdose v4 CCDD Category. *Bottom Right*: Non-heroin Opioid Overdose Visits.   
+
+
+```{r fig.width=15, fig.align='center', echo=FALSE, message=FALSE, warning=FALSE, error=FALSE, fig.width=15, fig.height=10}
+#FORMATTING DATASET FOR ALL DRUG BAR CHART
+#creating datasets for bar charts 
+
+bar_data <- function(df, CCDD) {
+  
+  bar_data <- df %>%
+                filter(CCDDCategory==CCDD, Sex!='Unknown', AgeGroup!='Unknown') %>%
+                group_by(Sex, AgeGroup) %>%
+                summarise(n=n()) %>%
+                ungroup()
+  
+  colnames(bar_data) <- c("Sex", "Age Group", "Count")
+  
+  bar_data
+  
+}
+
+#creating bar plot data for bar plots 
+bar_AD <- bar_data(county_dd, 'CDC All Drug v1')
+bar_op <- bar_data(county_dd, 'CDC Opioid Overdose v2')
+bar_h <- bar_data(county_dd, 'CDC Heroin Overdose v4')
+  
+ids <- county_dd[county_dd$CCDDCategory=='CDC Heroin Overdose v4', 'C_BioSense_ID']
+
+bar_nh <- county_dd %>%
+     filter(!(C_BioSense_ID %in% ids), CCDDCategory=='CDC Opioid Overdose v2', Sex!='Unknown', AgeGroup!='Unknown') %>%
+     group_by(Sex, AgeGroup) %>%
+     summarise(n=n()) %>%
+     ungroup()
+
+colnames(bar_nh) <- c("Sex", "Age Group", "Count")
+
+#Create a custom color scale
+myColors <- c('#db6972', '#0015ff', '#4f9b44')
+bar_AD$Sex <- as.factor(bar_AD$Sex)
+names(myColors) <- levels(bar_AD$Sex)
+colScale <- scale_fill_manual(name = "sex", values = myColors)
+
+
+#creating plots
+
+creating_bar_chart <- function(data, title) {
+  
+  ggplot(data=data, aes(x=`Age Group`, y=Count, fill=Sex)) +
+     geom_bar(stat="identity", position=position_dodge()) + theme(plot.subtitle = element_text(vjust = 1), 
+     plot.caption = element_text(vjust = 1), 
+     legend.position = "bottom", legend.direction = "horizontal") +labs(title = title) + 
+     theme(axis.title = element_text(size = 14), 
+     axis.text = element_text(size = 12), 
+     plot.title = element_text(size = 18, hjust = 0.5), legend.text = element_text(size = 12), 
+     legend.title = element_text(size = 13)) +
+     guides(fill=guide_legend(title="Sex")) +
+     scale_y_continuous(expand = c(0,0),
+                        limits = c(0, max(bar_AD$Count+5))) +
+    colScale +
+    scale_x_discrete(name='Age Group')
+      
+  }
+
+#creating bar plots
+p1 <- creating_bar_chart(bar_AD, "CDC All Drug v1 CCDD Category by Age and Sex")
+p2 <- creating_bar_chart(bar_op, "CDC Opioid Overdose v2 CCDD Category by Age and Sex")  
+p3 <- creating_bar_chart(bar_h, "CDC Heroin Overdose v4 CCDD Category by Age and Sex")
+p4 <- creating_bar_chart(bar_nh, "Non-Heroin Opioid Overdose by Age and Sex")
+
+grid.arrange(p1, p2, p3, p4, ncol=2)
+
+```
+<br />
+<br />
+
+**Table 4.** *ED Visit counts and percents for suspected overdose visits by category from `r first_quarter` through `r last_quarter`, by facilities within `r params$county` County*  
+```{r fig.width=15, fig.align='center', echo=FALSE, message=FALSE, warning=FALSE, error=FALSE}
+#PULLING IN PRODUCTION DATES. THESE ARE JUST FROM THE MFT
+#setwd('~/opioid_reports/reports_v5/data')
+prod_date <- read.csv('prod_date.csv', stringsAsFactors = FALSE)
+
+prod_date <- prod_date %>%
+               distinct(Facility_Name, Date_Activated)
+
+county_dd$Facility_Name <- substring(county_dd$HospitalName, 4)
+
+#GETTING n and %'s for different CCDD's
+
+table_4_col_percents <- function(CCDD) {
+  
+  county_dd %>%
+    filter(CCDDCategory==CCDD) %>%
+    group_by(Facility_Name) %>%
+    summarise(n=n()) %>%
+    mutate(freq = paste(round((n / sum(n))*100, 1), '%'))
+  
+}
+
+all_drug <- table_4_col_percents('CDC All Drug v1')
+opioid <- table_4_col_percents('CDC Opioid Overdose v2')
+heroin <- table_4_col_percents('CDC Heroin Overdose v4')
+
+#creating table 3     
+table_3 <- Reduce(function(x,y) merge(x = x, y = y, by = c('Facility_Name'), all=TRUE), list(all_drug, opioid, heroin))
+#replacing NA's with 0
+table_3[c('n', 'n.x', 'n.y')][is.na(table_3[c('n', 'n.x', 'n.y')])] <- 0
+#creating non-heroin opioid row
+table_3$n.z <- table_3$n.y-table_3$n
+table_3$freq.z=paste0(round((table_3$n.z / sum(table_3$n.z))*100, 1), ' %')
+#replacing NA %'s with "0 %""
+table_3[c('freq', 'freq.x', 'freq.y', 'freq.z')][is.na(table_3[c('freq', 'freq.x', 'freq.y', 'freq.z')])] <- '0 %'
+
+table_3 <- merge(table_3, prod_date, by='Facility_Name')
+table_3$Date_Activated <-as.Date(table_3$Date_Activated)
+table_3 <- table_3 %>% select(Facility_Name, Date_Activated, everything()) %>% mutate(Facility_Name=substring(table_3$Facility_Name, 3))
+
+
+#adding row totals
+totals <- colSums(table_3[, c(3, 5, 7, 9)])
+totals <- insert(totals, ats=1, 'Total')
+totals <- insert(totals, ats=1, 'Total')
+
+for (i in c(4, 6, 8, 10)) {
+  totals <- insert(totals, ats=i, '100%')
+}
+
+totals[2] <- ''
+table_3$Date_Activated <- as.character(table_3$Date_Activated)
+
+table_3 <- rbind(totals, table_3)
+
+#CREATING TABLE
+table_3 %>%
+     kable(align=c('l', 'c', 'c', 'c', 'c', 'c', 'c', 'c', 'c'), col.names = c('Facility', 'Prod Date*', 'n', '%', 'n', '%', 'n', '%', 'n', '%')) %>%
+     kable_styling("striped") %>%
+     add_header_above(c(" " = 2, "All Drugs" = 2, "Opioid" = 2, "Heroin" = 2, "Non-Heroin Opioid" = 2)) %>%
+     column_spec(1, width='12cm') %>%
+     column_spec(2, width='3cm') %>%
+     column_spec(3:10, width='2cm') %>%
+     footnote(symbol=c("Indicates the date the facility began contributing data to NSSP ESSENCE"))  %>%
+     row_spec(1, bold = T)
+     
+```
+<br />
+<br />
+
+**Table 5.** *Breakdown of suspected all drug visit counts and percents of `r params$county` County residents and where they were treated `r first_quarter` through `r last_quarter`.* This table includes all drug ED visits of patients with residence in `r params$county` County regardless of where they were treated.
+```{r echo=FALSE, out.width=2}
+table_4 <- data_details %>% 
+               filter(C_Patient_County==code, CCDDCategory=='CDC All Drug v1', QuarterYear>=first_quarter) %>%
+               mutate(Hospital_County=paste0(substring(HospitalRegion, 4), ' County')) %>%
+               group_by(Hospital_County) %>%
+               summarise(n=n()) %>%
+               mutate(freq = paste(round((n / sum(n))*100, 1), '%')) %>%
+               arrange(desc(freq)) %>%
+               adorn_totals("row")
+
+table_4[nrow(table_4), 'freq'] <- '100 %'
+
+
+table_4 %>%
+     kable(align=c('l', 'c', 'c'), col.names = c('County', 'n', '%')) %>%
+     kable_styling("striped", full_width = F) %>%
+     row_spec(nrow(table_4), bold=T) %>%
+     kable_styling(position='center')
+     
+
+```
+
+<br />
+
+**Notes on the data\:**   
+
+* Data was pulled for this report on `r format(Sys.time(), '%d %B, %Y')`.
+* Records restricted to patients ≥11 years old.
+* Includes all records from facilities located in the county, regardless of patient location of residence. 
+* Suspected overdose visits may include visits in which substance use/abuse is mentioned rather than an acute overdose.
+* Data are preliminary based on information available reported to RHINO and may change. Sensitivity and specificity rely heavily on the completeness and   detail provided in emergency department records. As a result, some visits for true overdoses may be missed and others may be misclassified as an overdose.
+
+<br />
+
+
+**Syndromes used \:**
+
+1. [**CDC All Drug v1 query**](https://www.surveillancerepository.org/cdc-all-drug-v1)
+2. [**CDC Opioid Overdose v2 query**](https://www.surveillancerepository.org/cdc-opioid-v1)
+3. [**CDC Heroin Overdose v4 query**](https://www.surveillancerepository.org/cdc-heroin-v3)
+4. **Non-Heroin Opioid Overdose**: Calculated by subtracting Heroin Overdose v4 CCDD Category counts from Opioid Overdose v2 CCDD Category counts. Heroin overdoses and non-heroin overdoses are mutually exclusive. 
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
